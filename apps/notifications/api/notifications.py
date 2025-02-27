@@ -1,12 +1,12 @@
 from rest_framework.mixins import ListModelMixin, UpdateModelMixin, RetrieveModelMixin
-from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
-from common.drf.api import JMSGenericViewSet
-from common.permissions import IsObjectOwner, IsSuperUser, OnlySuperUserCanList
-from notifications.notifications import system_msgs
-from notifications.models import SystemMsgSubscription, UserMsgSubscription
+from common.api import JMSGenericViewSet
+from common.permissions import IsValidUser
 from notifications.backends import BACKEND
+from notifications.models import SystemMsgSubscription, UserMsgSubscription
+from notifications.notifications import system_msgs
 from notifications.serializers import (
     SystemMsgSubscriptionSerializer, SystemMsgSubscriptionByCategorySerializer,
     UserMsgSubscriptionSerializer,
@@ -19,27 +19,31 @@ __all__ = (
 
 
 class BackendListView(APIView):
+    permission_classes = [IsValidUser]
+
     def get(self, request):
         data = [
             {
                 'name': backend,
                 'name_display': backend.label
             }
-            for backend in BACKEND
-            if backend.is_enable
+            for backend in BACKEND if backend.is_enable
         ]
         return Response(data=data)
 
 
-class SystemMsgSubscriptionViewSet(ListModelMixin,
-                                   UpdateModelMixin,
-                                   JMSGenericViewSet):
+class SystemMsgSubscriptionViewSet(
+    ListModelMixin, UpdateModelMixin, JMSGenericViewSet
+):
     lookup_field = 'message_type'
     queryset = SystemMsgSubscription.objects.all()
     serializer_classes = {
         'list': SystemMsgSubscriptionByCategorySerializer,
         'update': SystemMsgSubscriptionSerializer,
         'partial_update': SystemMsgSubscriptionSerializer
+    }
+    rbac_perms = {
+        '*': 'settings.change_systemmsgsubscription'
     }
 
     def list(self, request, *args, **kwargs):
@@ -80,15 +84,20 @@ class UserMsgSubscriptionViewSet(ListModelMixin,
                                  UpdateModelMixin,
                                  JMSGenericViewSet):
     lookup_field = 'user_id'
-    queryset = UserMsgSubscription.objects.all()
     serializer_class = UserMsgSubscriptionSerializer
-    permission_classes = (IsObjectOwner | IsSuperUser, OnlySuperUserCanList)
+    permission_classes = (IsValidUser,)
+
+    def get_queryset(self):
+        queryset = UserMsgSubscription.objects.filter(user=self.request.user)
+        return queryset
 
 
 def get_all_test_messages(request):
     import textwrap
     from ..notifications import Message
     from django.shortcuts import HttpResponse
+    if not request.user.is_superuser:
+        return HttpResponse('没有权限', status=401)
 
     msgs_cls = Message.get_all_sub_messages()
     html_data = '<h3>HTML 格式 </h3>'
@@ -121,5 +130,3 @@ def get_all_test_messages(request):
         <hr />
         """).format(msg_cls.__name__, msg_text)
     return HttpResponse(html_data + text_data)
-
-
